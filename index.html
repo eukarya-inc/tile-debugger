@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>3D Tiles Debugger</title>
+    <script>
+        // URLパラメータからCesiumバージョンを取得
+        const urlParams = new URLSearchParams(window.location.search);
+        const cesiumVersion = urlParams.get('cesiumVersion') || '1.132';
+        
+        // Save original URL parameters for recovery
+        window.originalUrlParams = {
+            url: urlParams.get('url') || urlParams.get('tilesetUrl'),
+            terrain: urlParams.get('terrain'),
+            imagery: urlParams.get('imagery'),
+            ionToken: urlParams.get('ionToken'),
+            cesiumVersion: cesiumVersion
+        };
+        
+        // Cesiumのスクリプトとスタイルを動的に読み込み
+        document.write(`<script src="https://cesium.com/downloads/cesiumjs/releases/${cesiumVersion}/Build/Cesium/Cesium.js" onerror="handleCesiumLoadError()"><\/script>`);
+        document.write(`<link href="https://cesium.com/downloads/cesiumjs/releases/${cesiumVersion}/Build/Cesium/Widgets/widgets.css" rel="stylesheet">`);
+        
+        window.CESIUM_BASE_URL = `https://cesium.com/downloads/cesiumjs/releases/${cesiumVersion}/Build/Cesium/`;
+        
+        function handleCesiumLoadError() {
+            console.error(`Failed to load Cesium version ${cesiumVersion}`);
+            window.cesiumLoadError = true;
+        }
+    </script>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: sans-serif;
+        }
+        #cesiumContainer {
+            width: 100%;
+            height: 100%;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(42, 42, 42, 0.9);
+            color: white;
+            border-radius: 5px;
+            z-index: 100;
+            max-width: 400px;
+            transition: all 0.3s ease;
+        }
+        #info.collapsed {
+            height: 35px;
+            overflow: hidden;
+        }
+        #info-header {
+            padding: 10px 15px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+        #info-header h3 {
+            margin: 0;
+            font-size: 16px;
+        }
+        #toggle-icon {
+            font-size: 12px;
+            transition: transform 0.3s;
+        }
+        #info.collapsed #toggle-icon {
+            transform: rotate(180deg);
+        }
+        #info-content {
+            padding: 10px 15px;
+        }
+        #info p {
+            margin: 5px 0;
+            font-size: 12px;
+        }
+        .controls {
+            /* Remove top margin and border */
+        }
+        .controls label {
+            display: block;
+            margin: 5px 0;
+            font-size: 12px;
+        }
+        .controls select, .controls button {
+            width: 100%;
+            padding: 5px;
+            margin: 3px 0;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        .controls button {
+            cursor: pointer;
+            background: rgba(48, 148, 255, 0.7);
+        }
+        .controls button:hover {
+            background: rgba(48, 148, 255, 0.9);
+        }
+        .checkbox-group {
+            margin: 10px 0;
+            padding: 10px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 3px;
+        }
+        .checkbox-group h4 {
+            margin: 0 0 8px 0;
+            font-size: 12px;
+            font-weight: normal;
+            opacity: 0.8;
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+            font-size: 11px;
+        }
+        .checkbox-item input[type="checkbox"] {
+            margin-right: 8px;
+            cursor: pointer;
+        }
+        .checkbox-item label {
+            cursor: pointer;
+            margin: 0;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+            font-size: 11px;
+            white-space: pre-wrap;
+            line-height: 1.4;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .status.success {
+            background: rgba(76, 175, 80, 0.3);
+        }
+        .status.error {
+            background: rgba(244, 67, 54, 0.3);
+        }
+        
+        /* Style Editor Modal */
+        #styleEditorModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+        }
+        
+        #styleEditorContent {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            width: 600px;
+            max-width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        #styleEditorContent h3 {
+            margin: 0 0 15px 0;
+            color: white;
+        }
+        
+        #styleEditor {
+            width: 100%;
+            height: 400px;
+            background: #1e1e1e;
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 4px;
+            padding: 10px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            resize: vertical;
+        }
+        
+        .editor-buttons {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        
+        .editor-buttons button {
+            padding: 8px 16px;
+            background: rgba(48, 148, 255, 0.7);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .editor-buttons button:hover {
+            background: rgba(48, 148, 255, 0.9);
+        }
+        
+        .editor-buttons button.cancel {
+            background: rgba(150, 150, 150, 0.7);
+        }
+        
+        .editor-buttons button.cancel:hover {
+            background: rgba(150, 150, 150, 0.9);
+        }
+        
+        #styleError {
+            color: #ff6b6b;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+    
+    <!-- Style Editor Modal -->
+    <div id="styleEditorModal">
+        <div id="styleEditorContent">
+            <h3>Edit 3D Tiles Style (JSON)</h3>
+            <textarea id="styleEditor" placeholder="Enter Cesium3DTileStyle JSON here. Example:
+{
+  &quot;color&quot;: {
+    &quot;conditions&quot;: [
+      [&quot;${Height} >= 100&quot;, &quot;color('purple')&quot;],
+      [&quot;${Height} >= 50&quot;, &quot;color('red')&quot;],
+      [&quot;true&quot;, &quot;color('blue')&quot;]
+    ]
+  },
+  &quot;show&quot;: true
+}"></textarea>
+            <div id="styleError"></div>
+            <div class="editor-buttons">
+                <button class="cancel" onclick="closeStyleEditor()">Cancel</button>
+                <button onclick="applyStyle()">Apply</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="info">
+        <div id="info-header" onclick="togglePanel()">
+            <h3>3D Tiles Debugger</h3>
+            <span id="toggle-icon">▼</span>
+        </div>
+        <div id="info-content">
+            <div class="controls">
+                <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+                    <input type="text" id="customUrl" placeholder="https://example.com/tileset.json" style="flex: 1; padding: 5px; background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.3); border-radius: 3px; font-size: 12px;" onkeypress="if(event.key === 'Enter') loadCustomUrl()">
+                    <button onclick="loadCustomUrl()" style="width: auto; padding: 5px 10px;">Load</button>
+                    <button onclick="zoomToTileset()" style="width: auto; padding: 5px 10px;">Zoom</button>
+                </div>
+            </div>
+
+            <div class="controls" style="margin-top: 10px; margin-bottom: 10px;">
+                <button onclick="openStyleEditor()" style="width: 100%; padding: 5px;">Edit 3D Tiles Style</button>
+            </div>
+            
+            <div class="checkbox-group">
+                <h4>3D Tiles Debug Options</h4>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="debugWireframe" onchange="updateDebugSettings()">
+                    <label for="debugWireframe">Wireframe</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="debugBoundingVolume" onchange="updateDebugSettings()">
+                    <label for="debugBoundingVolume">Bounding Volumes</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="debugContentBoundingVolume" onchange="updateDebugSettings()">
+                    <label for="debugContentBoundingVolume">Content Bounding</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="debugGeometricError" onchange="updateDebugSettings()">
+                    <label for="debugGeometricError">Geometric Error</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="debugRenderingStatistics" onchange="updateDebugSettings()">
+                    <label for="debugRenderingStatistics">Rendering Statistics</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="debugShowUrl" onchange="updateDebugSettings()">
+                    <label for="debugShowUrl">Show URLs</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="debugShowMemoryUsage" onchange="updateDebugSettings()">
+                    <label for="debugShowMemoryUsage">Memory Usage</label>
+                </div>
+            </div>
+
+            <div class="controls" style="margin-top: 10px;">
+                <div style="display: flex; gap: 5px; align-items: center;">
+                    <label style="font-size: 12px; white-space: nowrap;">Cesium</label>
+                    <input type="text" id="cesiumVersion" value="1.132" style="flex: 1; padding: 5px; background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.3); border-radius: 3px; font-size: 12px;" placeholder="e.g. 1.132" onkeypress="if(event.key === 'Enter') changeCesiumVersion()">
+                    <button onclick="changeCesiumVersion()" style="width: auto; padding: 5px 10px;">Change</button>
+                </div>
+                
+                <div style="display: flex; gap: 5px; align-items: center; margin-top: 5px;">
+                    <label style="font-size: 12px; white-space: nowrap;">Imagery</label>
+                    <input type="text" id="imageryUrl" style="flex: 1; padding: 5px; background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.3); border-radius: 3px; font-size: 12px;" placeholder="https://example.com/{z}/{x}/{y}.png" onkeypress="if(event.key === 'Enter') changeImageryProvider()">
+                    <button onclick="changeImageryProvider()" style="width: auto; padding: 5px 10px;">Apply</button>
+                </div>
+                
+                <div style="display: flex; gap: 5px; align-items: center; margin-top: 5px;">
+                    <label style="font-size: 12px; white-space: nowrap;">Terrain</label>
+                    <input type="text" id="terrainUrl" style="flex: 1; padding: 5px; background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.3); border-radius: 3px; font-size: 12px;" placeholder="URL, Ion asset ID, or 'ellipsoid' for flat" onkeypress="if(event.key === 'Enter') changeTerrainProvider()">
+                    <button onclick="changeTerrainProvider()" style="width: auto; padding: 5px 10px;">Apply</button>
+                </div>
+                
+                <div style="display: flex; gap: 5px; align-items: center; margin-top: 5px;">
+                    <label style="font-size: 12px; white-space: nowrap;">Ion Token</label>
+                    <input type="text" id="ionToken" style="flex: 1; padding: 5px; background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.3); border-radius: 3px; font-size: 12px;" placeholder="Your Cesium Ion access token" onkeypress="if(event.key === 'Enter') setIonToken()">
+                    <button onclick="setIonToken()" style="width: auto; padding: 5px 10px;">Set</button>
+                </div>
+            </div>
+
+            <div id="status" class="status">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        // Check if Cesium loaded successfully
+        if (window.cesiumLoadError || typeof Cesium === 'undefined') {
+            document.getElementById('status').textContent = `Failed to load Cesium version ${cesiumVersion}. Please check the version number.`;
+            document.getElementById('status').className = 'status error';
+            console.error(`Failed to load Cesium version ${cesiumVersion}`);
+            
+            // Restore URL values from saved parameters
+            if (window.originalUrlParams) {
+                if (window.originalUrlParams.url) {
+                    document.getElementById('customUrl').value = window.originalUrlParams.url;
+                }
+                if (window.originalUrlParams.terrain) {
+                    document.getElementById('terrainUrl').value = window.originalUrlParams.terrain;
+                }
+                if (window.originalUrlParams.imagery) {
+                    document.getElementById('imageryUrl').value = window.originalUrlParams.imagery;
+                }
+                if (window.originalUrlParams.ionToken) {
+                    document.getElementById('ionToken').value = window.originalUrlParams.ionToken;
+                }
+                document.getElementById('cesiumVersion').value = window.originalUrlParams.cesiumVersion || '1.132';
+            }
+            
+            // Show error and stop execution
+            throw new Error('Cesium failed to load');
+        }
+        
+        // Cesiumバージョンを表示
+        console.log(`Cesium version: ${cesiumVersion}`);
+        if (typeof Cesium !== 'undefined' && Cesium.VERSION) {
+            console.log(`Cesium.VERSION: ${Cesium.VERSION}`);
+        }
+        
+        // Cesiumビューア初期化（シンプルな設定）
+        const viewer = new Cesium.Viewer('cesiumContainer', {
+            // デフォルト設定を使用
+            baseLayerPicker: true,
+            geocoder: false,
+            homeButton: true,
+            sceneModePicker: true,
+            navigationHelpButton: true,
+            animation: true,  // Enable animation widget for clock control
+            timeline: true,   // Enable timeline widget
+            fullscreenButton: true,
+            // インスペクタを有効化
+            scene3DOnly: false,
+            selectionIndicator: true,
+            infoBox: true  // 情報ポップアップを有効化
+        });
+        
+        // Cesium Inspectorを追加（デバッグ用）
+        viewer.extend(Cesium.viewerCesiumInspectorMixin);
+
+        let currentTileset = null;
+        
+        // Add click handler for 3D Tiles features
+        viewer.screenSpaceEventHandler.setInputAction(function onMouseClick(movement) {
+            const pickedFeature = viewer.scene.pick(movement.position);
+            
+            if (Cesium.defined(pickedFeature)) {
+                // Check if it's a 3D Tiles feature
+                if (pickedFeature.content && pickedFeature.primitive === currentTileset) {
+                    const feature = pickedFeature;
+                    const content = feature.content;
+                    
+                    // Get feature index if available
+                    let featureId = 'unknown';
+                    if (Cesium.defined(feature.featureId)) {
+                        featureId = feature.featureId;
+                    } else if (Cesium.defined(feature._batchId)) {
+                        featureId = feature._batchId;
+                    }
+                    
+                    // Get all properties
+                    const properties = {};
+                    if (feature.hasProperty) {
+                        // Get property IDs
+                        let propertyIds = [];
+                        if (typeof feature.getPropertyIds === 'function') {
+                            propertyIds = feature.getPropertyIds();
+                        } else if (typeof feature.getPropertyNames === 'function') {
+                            propertyIds = feature.getPropertyNames();
+                        }
+                        
+                        // Get each property value
+                        propertyIds.forEach(propId => {
+                            try {
+                                properties[propId] = feature.getProperty(propId);
+                            } catch (e) {
+                                properties[propId] = null;
+                            }
+                        });
+                    }
+                    
+                    // Log the information
+                    console.log('Feature clicked:', {
+                        featureId: featureId,
+                        tile: content.tile,
+                        properties: properties,
+                        feature: feature
+                    });
+                }
+            }
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+        
+        // パネルの開閉
+        function togglePanel() {
+            const panel = document.getElementById('info');
+            panel.classList.toggle('collapsed');
+        }
+        
+        // デバッグ設定の更新
+        function updateDebugSettings() {
+            if (!currentTileset) return;
+            
+            currentTileset.debugShowBoundingVolume = document.getElementById('debugBoundingVolume').checked;
+            currentTileset.debugShowContentBoundingVolume = document.getElementById('debugContentBoundingVolume').checked;
+            currentTileset.debugShowGeometricError = document.getElementById('debugGeometricError').checked;
+            currentTileset.debugShowRenderingStatistics = document.getElementById('debugRenderingStatistics').checked;
+            currentTileset.debugShowUrl = document.getElementById('debugShowUrl').checked;
+            currentTileset.debugWireframe = document.getElementById('debugWireframe').checked;
+            currentTileset.debugShowMemoryUsage = document.getElementById('debugShowMemoryUsage').checked;
+            currentTileset.debugShowPickStatistics = document.getElementById('debugShowMemoryUsage').checked;
+        }
+
+        // ステータス更新
+        function updateStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = 'status';
+            if (type === 'success') statusEl.classList.add('success');
+            if (type === 'error') statusEl.classList.add('error');
+        }
+
+        // タイルセットにズーム
+        function zoomToTileset() {
+            if (currentTileset) {
+                viewer.zoomTo(currentTileset);
+            }
+        }
+        
+        // カスタムURLから3D Tilesを読み込み
+        function loadCustomUrl() {
+            const urlInput = document.getElementById('customUrl');
+            let url = urlInput.value.trim();
+            
+            // If empty, use default PLATEAU URL
+            if (!url) {
+                url = 'https://plateau.geospatial.jp/main/data/3d-tiles/bldg/13100_tokyo/13101_chiyoda-ku/texture/tileset.json';
+                urlInput.value = url;
+                updateStatus('Using default PLATEAU URL', 'info');
+            }
+            
+            // Check if it's an Ion asset ID (numeric)
+            if (/^\d+$/.test(url)) {
+                const assetId = parseInt(url);
+                loadIonTileset(assetId);
+            } else {
+                loadSimpleTileset(url);
+            }
+            updateBrowserUrl(url);
+        }
+        
+        // Ion 3D Tilesを読み込み
+        function loadIonTileset(assetId) {
+            updateStatus(`Loading Ion asset ${assetId}...`, 'loading');
+            
+            // 既存のタイルセットを削除
+            if (currentTileset) {
+                viewer.scene.primitives.remove(currentTileset);
+                currentTileset = null;
+            }
+            
+            Cesium.Cesium3DTileset.fromIonAssetId(assetId)
+                .then((tileset) => {
+                    viewer.scene.primitives.add(tileset);
+                    currentTileset = tileset;
+                    
+                    // Apply debug settings
+                    tileset.debugShowBoundingVolume = document.getElementById('debugBoundingVolume').checked;
+                    tileset.debugShowContentBoundingVolume = document.getElementById('debugContentBoundingVolume').checked;
+                    tileset.debugShowGeometricError = document.getElementById('debugGeometricError').checked;
+                    tileset.debugShowRenderingStatistics = document.getElementById('debugRenderingStatistics').checked;
+                    tileset.debugShowUrl = document.getElementById('debugShowUrl').checked;
+                    tileset.debugWireframe = document.getElementById('debugWireframe').checked;
+                    tileset.debugShowMemoryUsage = document.getElementById('debugShowMemoryUsage').checked;
+                    
+                    viewer.zoomTo(tileset).then(() => {
+                        console.log('Camera zoomed to Ion tileset');
+                        viewer.scene.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+                    });
+                    
+                    updateStatus(`✓ Ion asset ${assetId} loaded successfully`, 'success');
+                })
+                .catch((error) => {
+                    updateStatus(`Error loading Ion asset: ${error.message}`, 'error');
+                    console.error('Failed to load Ion tileset:', error);
+                });
+        }
+        
+        // ブラウザのURLを更新
+        function updateBrowserUrl(tilesetUrl) {
+            const params = new URLSearchParams(window.location.search);
+            params.set('url', tilesetUrl);
+            
+            // Cesiumバージョンも保持
+            const cesiumVersion = document.getElementById('cesiumVersion').value;
+            if (cesiumVersion) {
+                params.set('cesiumVersion', cesiumVersion);
+            }
+            
+            // URLを更新（ページリロードなし）
+            const newUrl = window.location.pathname + '?' + params.toString();
+            window.history.replaceState({}, '', newUrl);
+        }
+        
+        // Style Editor functions
+        let currentStyle = null;
+        
+        function openStyleEditor() {
+            if (!currentTileset) {
+                updateStatus('Please load a 3D Tileset first', 'error');
+                return;
+            }
+            
+            const modal = document.getElementById('styleEditorModal');
+            const editor = document.getElementById('styleEditor');
+            
+            // If there's a current style, show it
+            if (currentStyle) {
+                editor.value = JSON.stringify(currentStyle, null, 2);
+            } else {
+                // Show a default example
+                editor.value = JSON.stringify({
+                    color: "color('white')",
+                    show: true
+                }, null, 2);
+            }
+            
+            document.getElementById('styleError').textContent = '';
+            modal.style.display = 'block';
+        }
+        
+        function closeStyleEditor() {
+            document.getElementById('styleEditorModal').style.display = 'none';
+        }
+        
+        function applyStyle() {
+            const editor = document.getElementById('styleEditor');
+            const errorEl = document.getElementById('styleError');
+            
+            try {
+                const styleJson = JSON.parse(editor.value);
+                
+                // Apply the style to the tileset
+                if (currentTileset) {
+                    currentTileset.style = new Cesium.Cesium3DTileStyle(styleJson);
+                    currentStyle = styleJson;
+                    updateStatus('Style applied successfully', 'success');
+                    closeStyleEditor();
+                }
+            } catch (error) {
+                errorEl.textContent = 'Invalid JSON: ' + error.message;
+            }
+        }
+        
+        // Close modal when clicking outside
+        document.getElementById('styleEditorModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeStyleEditor();
+            }
+        });
+        
+        // Ion token設定
+        function setIonToken() {
+            const tokenInput = document.getElementById('ionToken');
+            let token = tokenInput.value.trim();
+            
+            // If empty, use default Ion token
+            if (!token) {
+                token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIzZjJlMGJlZi1hMGNjLTQzNTktYWY5Yi1jNmEzOWU0M2E3NGQiLCJpZCI6MzMwNywiaWF0IjoxNzM1Mzg1MTE0fQ.8JmKYx-1MQfzJ6hRAMI2EAQ5NnhshzGWlB7HH8TZ-vg';
+                tokenInput.value = token;
+                updateStatus('Using default Ion token', 'info');
+            }
+            
+            // Set the Ion token
+            Cesium.Ion.defaultAccessToken = token;
+            
+            // Update URL parameters
+            const params = new URLSearchParams(window.location.search);
+            params.set('ionToken', token);
+            window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
+            
+            updateStatus('Ion token set successfully', 'success');
+        }
+        
+        // Terrain provider変更
+        function changeTerrainProvider() {
+            const terrainInput = document.getElementById('terrainUrl');
+            let terrainUrl = terrainInput.value.trim();
+            
+            // If empty, use default flat terrain
+            if (!terrainUrl) {
+                terrainUrl = 'ellipsoid';
+                terrainInput.value = terrainUrl;
+                updateStatus('Using default flat terrain', 'info');
+            }
+            
+            try {
+                let terrainProvider;
+                
+                if (terrainUrl.toLowerCase() === 'ellipsoid' || terrainUrl.toLowerCase() === 'flat') {
+                    // Flat/ellipsoid terrain
+                    terrainProvider = new Cesium.EllipsoidTerrainProvider();
+                    updateStatus('Applied flat terrain', 'success');
+                } else if (terrainUrl.toLowerCase() === 'world' || terrainUrl.toLowerCase() === 'cesium') {
+                    // Cesium World Terrain (Ion asset ID 1)
+                    terrainProvider = Cesium.CesiumTerrainProvider.fromUrl(
+                        Cesium.IonResource.fromAssetId(1),
+                        {
+                            requestVertexNormals: true,
+                            requestWaterMask: true
+                        }
+                    );
+                    updateStatus('Applied Cesium World Terrain', 'success');
+                } else if (/^\d+$/.test(terrainUrl)) {
+                    // Ion asset ID (numeric)
+                    const assetId = parseInt(terrainUrl);
+                    terrainProvider = Cesium.CesiumTerrainProvider.fromUrl(
+                        Cesium.IonResource.fromAssetId(assetId),
+                        {
+                            requestVertexNormals: true
+                        }
+                    );
+                    updateStatus(`Applied Ion terrain asset ${assetId}`, 'success');
+                } else {
+                    // Custom terrain URL
+                    terrainProvider = Cesium.CesiumTerrainProvider.fromUrl(terrainUrl, {
+                        requestVertexNormals: true
+                    });
+                    updateStatus('Applied custom terrain', 'success');
+                }
+                
+                // Apply the terrain provider
+                terrainProvider.then(provider => {
+                    viewer.terrainProvider = provider;
+                }).catch(error => {
+                    updateStatus(`Terrain error: ${error.message}`, 'error');
+                });
+                
+            } catch (error) {
+                updateStatus(`Terrain error: ${error.message}`, 'error');
+            }
+        }
+        
+        // Imagery provider変更
+        function changeImageryProvider() {
+            const imageryInput = document.getElementById('imageryUrl');
+            let imageryUrl = imageryInput.value.trim();
+            
+            if (!imageryUrl) {
+                // Remove custom imagery layer if empty
+                if (viewer.imageryLayers.length > 1) {
+                    // Keep the base layer, remove others
+                    while (viewer.imageryLayers.length > 1) {
+                        viewer.imageryLayers.remove(viewer.imageryLayers.get(viewer.imageryLayers.length - 1));
+                    }
+                    updateStatus('Removed custom imagery layer', 'success');
+                } else {
+                    updateStatus('No custom imagery to remove', 'info');
+                }
+                return;
+            }
+            
+            try {
+                let imageryProvider;
+                
+                // Check if it's a XYZ tile URL pattern
+                if (imageryUrl.includes('{z}') && imageryUrl.includes('{x}') && imageryUrl.includes('{y}')) {
+                    // XYZ tile service (like OpenStreetMap, Google Maps tiles, etc.)
+                    imageryProvider = new Cesium.UrlTemplateImageryProvider({
+                        url: imageryUrl,
+                        credit: 'Custom Imagery',
+                        maximumLevel: 19
+                    });
+                    updateStatus('Applied XYZ tile imagery', 'success');
+                } else if (imageryUrl.includes('{TileMatrix}') || imageryUrl.includes('{TileRow}') || imageryUrl.includes('{TileCol}')) {
+                    // WMTS style URL
+                    imageryProvider = new Cesium.UrlTemplateImageryProvider({
+                        url: imageryUrl,
+                        credit: 'Custom WMTS Imagery'
+                    });
+                    updateStatus('Applied WMTS imagery', 'success');
+                } else if (/^\d+$/.test(imageryUrl)) {
+                    // Ion asset ID (numeric)
+                    const assetId = parseInt(imageryUrl);
+                    imageryProvider = Cesium.IonImageryProvider.fromAssetId(assetId);
+                    updateStatus(`Applied Ion imagery asset ${assetId}`, 'success');
+                } else if (imageryUrl.toLowerCase().includes('wms')) {
+                    // WMS service
+                    const url = new URL(imageryUrl);
+                    const layers = url.searchParams.get('layers') || 'default';
+                    imageryProvider = new Cesium.WebMapServiceImageryProvider({
+                        url: url.origin + url.pathname,
+                        layers: layers,
+                        parameters: {
+                            transparent: true,
+                            format: 'image/png'
+                        }
+                    });
+                    updateStatus('Applied WMS imagery', 'success');
+                } else {
+                    // Try as a single image
+                    imageryProvider = new Cesium.SingleTileImageryProvider({
+                        url: imageryUrl
+                    });
+                    updateStatus('Applied single tile imagery', 'success');
+                }
+                
+                // Remove existing custom imagery layers (keep base layer)
+                while (viewer.imageryLayers.length > 1) {
+                    viewer.imageryLayers.remove(viewer.imageryLayers.get(viewer.imageryLayers.length - 1));
+                }
+                
+                // Add the new imagery layer
+                const imageryLayer = viewer.imageryLayers.addImageryProvider(imageryProvider);
+                imageryLayer.alpha = 1.0;  // Full opacity by default
+                
+                // Update URL parameters
+                const params = new URLSearchParams(window.location.search);
+                params.set('imagery', imageryUrl);
+                window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
+                
+            } catch (error) {
+                updateStatus(`Imagery error: ${error.message}`, 'error');
+                console.error('Failed to add imagery:', error);
+            }
+        }
+        
+        // Cesiumバージョンを変更
+        function changeCesiumVersion() {
+            const versionInput = document.getElementById('cesiumVersion');
+            let version = versionInput.value.trim();
+            
+            // If empty, use default version
+            if (!version) {
+                version = '1.132';
+                versionInput.value = version;
+                updateStatus('Using default Cesium version 1.132', 'info');
+            }
+            
+            // 現在のURLパラメータを保持してページをリロード
+            const currentUrl = document.getElementById('customUrl').value;
+            const terrainUrl = document.getElementById('terrainUrl').value;
+            const imageryUrl = document.getElementById('imageryUrl').value;
+            const ionToken = document.getElementById('ionToken').value;
+            const params = new URLSearchParams();
+            params.set('cesiumVersion', version);
+            if (currentUrl) {
+                params.set('url', currentUrl);
+            }
+            if (terrainUrl) {
+                params.set('terrain', terrainUrl);
+            }
+            if (imageryUrl) {
+                params.set('imagery', imageryUrl);
+            }
+            if (ionToken) {
+                params.set('ionToken', ionToken);
+            }
+            window.location.href = window.location.pathname + '?' + params.toString();
+        }
+
+        // シンプルな3D Tiles読み込み（点群データ用スタイル付き）
+        function loadSimpleTileset(url) {
+            updateStatus('Loading 3D Tiles...', 'loading');
+
+            // 既存のタイルセットを削除
+            if (currentTileset) {
+                viewer.scene.primitives.remove(currentTileset);
+                currentTileset = null;
+            }
+            
+            Cesium.Cesium3DTileset.fromUrl(url)
+                .then((tileset) => {
+                    viewer.scene.primitives.add(tileset);
+                    currentTileset = tileset;  // currentTilesetを設定
+                    
+                    // デフォルトスタイルは設定しない（ユーザーが必要に応じて設定）
+
+                    // デバッグ表示を設定（チェックボックスの状態に基づく）
+                    tileset.debugShowBoundingVolume = document.getElementById('debugBoundingVolume').checked;
+                    tileset.debugShowContentBoundingVolume = document.getElementById('debugContentBoundingVolume').checked;
+                    tileset.debugShowGeometricError = document.getElementById('debugGeometricError').checked;
+                    tileset.debugShowRenderingStatistics = document.getElementById('debugRenderingStatistics').checked;
+                    tileset.debugShowUrl = document.getElementById('debugShowUrl').checked;
+                    tileset.debugWireframe = document.getElementById('debugWireframe').checked;
+                    tileset.debugShowMemoryUsage = document.getElementById('debugShowMemoryUsage').checked;
+                    tileset.debugShowPickStatistics = document.getElementById('debugShowMemoryUsage').checked;
+
+                    // 詳細なデバッグ情報を出力
+                    let tileCount = 0;
+                    tileset.tileLoad.addEventListener(function(tile) {
+                        tileCount++;
+                        
+                        // タイル内のすべてのフィーチャーからプロパティを収集
+                        const allProperties = [];
+                        
+                        if (tile.content && tile.content.featuresLength > 0) {
+                            // 各フィーチャーのプロパティを収集
+                            for (let i = 0; i < tile.content.featuresLength; i++) {
+                                try {
+                                    const feature = tile.content.getFeature(i);
+                                    const featureProps = {};
+                                    
+                                    // プロパティIDを取得
+                                    let propertyIds = [];
+                                    if (typeof feature.getPropertyIds === 'function') {
+                                        propertyIds = feature.getPropertyIds();
+                                    } else if (typeof feature.getPropertyNames === 'function') {
+                                        propertyIds = feature.getPropertyNames();
+                                    }
+                                    
+                                    // 各プロパティの値を取得
+                                    propertyIds.forEach(propId => {
+                                        featureProps[propId] = feature.getProperty(propId);
+                                    });
+                                    
+                                    allProperties.push(featureProps);
+                                } catch (error) {
+                                    allProperties.push({ _error: error.message });
+                                }
+                            }
+                        }
+                        
+                        // タイル情報とプロパティをまとめて出力
+                        console.log(`Tile loaded (${tileCount}):`, 
+                            tile, 
+                            allProperties
+                        );
+                    });
+
+
+                    viewer.zoomTo(tileset).then(() => {
+                        console.log('Camera zoomed to tileset');
+                        // カメラの固定を解除
+                        viewer.scene.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+                    });
+
+                    updateStatus('✓ 3D Tiles loaded successfully', 'success');
+                    console.log('Tileset loaded:', tileset);
+                    console.log('Tileset ready:', tileset.ready);
+                    console.log('Tileset bounds:', tileset.boundingSphere);
+                })
+                .catch((error) => {
+                    // Check for different error types
+                    let errorMessage = error.message || error.toString();
+                    
+                    // Check for JSON parsing errors
+                    if (errorMessage.includes('JSON') || 
+                        errorMessage.includes('parse') ||
+                        errorMessage.includes('Unexpected token') ||
+                        errorMessage.includes('SyntaxError')) {
+                        
+                        // Try to fetch and validate JSON
+                        fetch(url)
+                            .then(response => response.text())
+                            .then(text => {
+                                try {
+                                    JSON.parse(text);
+                                    // JSON is valid, but might be wrong format
+                                    updateStatus(`Invalid tileset format: Not a valid 3D Tiles tileset\n\nURL: ${url}\n\nThe file is valid JSON but doesn't follow 3D Tiles specification`, 'error');
+                                } catch (jsonError) {
+                                    // Invalid JSON
+                                    const lines = text.split('\n');
+                                    const errorLine = jsonError.message.match(/position (\d+)/);
+                                    let context = '';
+                                    
+                                    if (errorLine) {
+                                        const pos = parseInt(errorLine[1]);
+                                        context = `\n\nError near: "${text.substring(Math.max(0, pos - 20), Math.min(text.length, pos + 20))}"`;
+                                    }
+                                    
+                                    updateStatus(`Invalid JSON in tileset.json\n\nURL: ${url}\n\nError: ${jsonError.message}${context}`, 'error');
+                                    
+                                    console.error('JSON Parse Error:', {
+                                        url: url,
+                                        error: jsonError,
+                                        responseText: text.substring(0, 500)
+                                    });
+                                }
+                            })
+                            .catch(fetchError => {
+                                // Could be CORS or network error
+                                checkCorsError(url, error, fetchError);
+                            });
+                    }
+                    // Common CORS error indicators
+                    else if (errorMessage.includes('Failed to fetch') || 
+                        errorMessage.includes('NetworkError') ||
+                        errorMessage.includes('Load failed') ||
+                        errorMessage.includes('Request has failed') ||
+                        errorMessage.includes('CORS') ||
+                        error.statusCode === 0 ||
+                        error.statusCode === undefined) {
+                        
+                        // Try to fetch to confirm CORS issue
+                        fetch(url, { mode: 'cors' })
+                            .then(response => {
+                                if (!response.ok) {
+                                    updateStatus(`HTTP Error ${response.status}: ${response.statusText}\n\nURL: ${url}`, 'error');
+                                } else {
+                                    // Fetch succeeded, check content
+                                    response.text().then(text => {
+                                        try {
+                                            JSON.parse(text);
+                                            updateStatus(`Error loading tileset: ${errorMessage}\n\nURL: ${url}\n\nThe server responded but Cesium couldn't load the tileset`, 'error');
+                                        } catch (e) {
+                                            updateStatus(`Invalid JSON response from server\n\nURL: ${url}`, 'error');
+                                        }
+                                    });
+                                }
+                            })
+                            .catch(fetchError => {
+                                checkCorsError(url, error, fetchError);
+                            });
+                    } else {
+                        updateStatus(`Error: ${errorMessage}\n\nURL: ${url}`, 'error');
+                        console.error('Failed to load tileset:', error);
+                    }
+                });
+                
+                function checkCorsError(url, originalError, fetchError) {
+                    // Likely CORS error
+                    const corsMessage = `CORS Error: Cannot load tileset\n\nURL: ${url}\n\nSolutions:\n` +
+                                  `• Enable CORS headers on the server\n` +
+                                  `• Use a proxy server\n` +
+                                  `• Host locally with proper CORS settings\n` +
+                                  `• For development: Use browser with disabled security`;
+                    
+                    updateStatus(corsMessage, 'error');
+                    
+                    console.error('CORS Error Details:', {
+                        url: url,
+                        tilesetError: originalError,
+                        fetchError: fetchError,
+                        hint: 'Server needs Access-Control-Allow-Origin header'
+                    });
+                }
+        }
+
+        // URLパラメータから値を設定
+        const params = new URLSearchParams(window.location.search);
+        const versionParam = params.get('cesiumVersion');
+        const tilesetParam = params.get('url') || params.get('tilesetUrl') || window.originalUrlParams?.url; // 両方サポート、保存した値も使用
+        const terrainParam = params.get('terrain') || window.originalUrlParams?.terrain;
+        const imageryParam = params.get('imagery');
+        const ionTokenParam = params.get('ionToken') || window.originalUrlParams?.ionToken;
+        
+        // Ion token設定（URLパラメータから）
+        if (ionTokenParam) {
+            document.getElementById('ionToken').value = ionTokenParam;
+            Cesium.Ion.defaultAccessToken = ionTokenParam;
+        }
+        
+        if (versionParam) {
+            document.getElementById('cesiumVersion').value = versionParam;
+        }
+        
+        if (terrainParam) {
+            document.getElementById('terrainUrl').value = terrainParam;
+            // Apply terrain after viewer is initialized
+            setTimeout(() => changeTerrainProvider(), 500);
+        }
+        
+        if (imageryParam) {
+            document.getElementById('imageryUrl').value = imageryParam;
+            // Apply imagery after viewer is initialized
+            setTimeout(() => changeImageryProvider(), 700);
+        }
+        
+        if (tilesetParam) {
+            document.getElementById('customUrl').value = tilesetParam;
+            // 初期読み込み
+            loadCustomUrl();
+        } else {
+            // デフォルトURLを設定
+            const defaultUrl = 'https://assets.cms.plateau.reearth.io/assets/0e/e5948a-e95c-4e31-be85-1f8c066ed996/13101_chiyoda-ku_pref_2023_citygml_1_op_bldg_3dtiles_13101_chiyoda-ku_lod1/tileset.json';
+            document.getElementById('customUrl').value = defaultUrl;
+            loadCustomUrl();
+        }
+    </script>
+</body>
+</html>
