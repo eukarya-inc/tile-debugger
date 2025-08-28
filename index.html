@@ -393,22 +393,25 @@
 
         let currentTileset = null;
         
-        // Add click handler for 3D Tiles features
-        viewer.screenSpaceEventHandler.setInputAction(function onMouseClick(movement) {
-            const pickedFeature = viewer.scene.pick(movement.position);
+        // Hook into the selection change event to log feature properties
+        // This won't interfere with the infoBox
+        const originalPick = viewer.scene.pick;
+        viewer.scene.pick = function(windowPosition, width, height) {
+            const result = originalPick.call(this, windowPosition, width, height);
             
-            if (Cesium.defined(pickedFeature)) {
-                // Check if it's a 3D Tiles feature
-                if (pickedFeature.content && pickedFeature.primitive === currentTileset) {
-                    const feature = pickedFeature;
-                    const content = feature.content;
+            // Log picked feature info if it's from our tileset
+            if (result && result.primitive === currentTileset) {
+                setTimeout(() => {
+                    const feature = result;
                     
-                    // Get feature index if available
+                    // Get feature index if available  
                     let featureId = 'unknown';
                     if (Cesium.defined(feature.featureId)) {
                         featureId = feature.featureId;
                     } else if (Cesium.defined(feature._batchId)) {
                         featureId = feature._batchId;
+                    } else if (Cesium.defined(feature.id)) {
+                        featureId = feature.id;
                     }
                     
                     // Get all properties
@@ -418,6 +421,8 @@
                         let propertyIds = [];
                         if (typeof feature.getPropertyIds === 'function') {
                             propertyIds = feature.getPropertyIds();
+                        } else if (typeof feature.getPropertyNames === 'function') {
+                            propertyIds = feature.getPropertyNames();
                         } else if (typeof feature.getPropertyNames === 'function') {
                             propertyIds = feature.getPropertyNames();
                         }
@@ -432,16 +437,20 @@
                         });
                     }
                     
-                    // Log the information
-                    console.log('Feature clicked:', {
-                        featureId: featureId,
-                        tile: content.tile,
-                        properties: properties,
-                        feature: feature
-                    });
-                }
+                    // Log the information (only if we have a tileset and it matches)
+                    if (Object.keys(properties).length > 0 || featureId !== 'unknown') {
+                        console.log('Feature clicked:', {
+                            featureId: featureId,
+                            tile: feature.content ? feature.content.tile : null,
+                            properties: properties,
+                            feature: feature
+                        });
+                    }
+                }, 0);
             }
-        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+            
+            return result;
+        };
         
         // パネルの開閉
         function togglePanel() {
